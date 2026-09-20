@@ -3,8 +3,8 @@ library(dplyr)
 library(readr)
 
 exposure_dir <- "exposure_all/lead_snps_cis"
-outcome_dir  <- "MR/outcome/survival_2021_gwas_results_files_with_rsid_no_chr23"
-output_dir   <- "MR/cis/harmonised_results_cis"
+outcome_dir  <- "outcome/survival_2021_gwas_results_files_with_rsid_no_chr23"
+output_dir   <- "cis/harmonised_results_cis"
 
 if (!dir.exists(output_dir)) {
   dir.create(output_dir, recursive = TRUE)
