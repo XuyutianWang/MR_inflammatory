@@ -1,0 +1,11 @@
+1. Aim: I am exploring the casual relationship between inflammatory biomarkers and breast cancer survival. 
+2. Method: Mendelian randomization. 
+3. Part 1: Exposure. The analysis workflow can be referred to MR/script/README.md. The exposures are from UKBPPP. Before Mendelian randomization, there is a biomarker list.(MR/exposure_all/download_UKBPPP/inflammatory_biomarkers_reference.csv), containing 206 biomarkers. Then I matched uniprot-id for these biomarkers. Among these biomarkers, there are 2 biomarkers without corresponding UniProt IDs (CCL6, CCL10); 22 biomarkers don't have unique unitprot id (like IL-8 and CXCL-8, they are the same biomarkers); 51 biomarkers don't have available data in UKBPPP. Finally, there are 127 biomarkers. I did clumping, but 7 biomarkers (CNTF,IL2,IL24,IL3,IL33,IL5,IL9) don't have available snps after clumping, because allele frequency is low, and the SNPs don't exist in 1000EUR. 
+Part 2 : Slopehunter. The analysis workflow can be referred to MR/slopehunter/README_sh.md. The incidence data has 6 subgroups, overall breast cancer, Her-2 enriched, Luminal A, Luminal B Her-2 negative, Luminal B, TNBC. The survival data has 25 subgroups. Only 4 groups are matched. overall breast cancer incidence ----- overall breast cancer survival;Luminal B-like: ER+ and/or PR+, and HER2+ ------ h) diagnosed with ER+ or PR+, and HER2+ tumours;Her-2 enriched ------ i) diagnosed with ER- and PR- and HER2+ tumours;TNBC ------ j) diagnosed with ER- and PR- and HER2- tumours. For these 4 matched groups, I used matched incidence data to do slopehunter. For unmatched groups, I used overall breast cancer incidence to do slopehunter. 
+
+Part 3: Outcome. I have 3 outcomes: 1) breast cancer incidence, 6 subgroups (MR/incidence/rsid_no_chr23) ;2) breast cancer survival, 25 subgroups (MR/outcome/survival_2021_gwas_results_files_with_rsid_no_chr23); 3) slopehunter-adjusted breast cancer survival, 25 subgroups, 25 subgroups (MR/slopehunter/slopehunter_out_gzfile_formr)
+
+Part 4: Harmonisation. 
+1) incidence: all snps have been harmonised.
+2) survival: IL13_P35225_OID20430_v1_Inflammation fail to harmonise
+3) slopehunter adjusted survival: IL13_P35225_OID20430_v1_Inflammation;IL1A_P01583_OID20488_v1_Inflammation;LIF_P15018_OID20824_v1_Neurology;NAMPT_P43490_OID21227_v1_Oncology fail to harmonise.
