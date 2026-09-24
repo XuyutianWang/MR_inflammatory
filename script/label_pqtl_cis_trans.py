@@ -10,14 +10,18 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gzip
 import json
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 
-ENSEMBL_URL = "https://rest.ensembl.org/lookup/symbol/homo_sapiens"
+# Current Ensembl REST lookup API.  Keep this as a base URL so an Ensembl
+# archive server can be selected on the command line for reproducible runs.
+ENSEMBL_API_BASE = "https://rest.ensembl.org"
 
 # The source UniProt table contains several protein aliases rather than current
 # HGNC symbols. These accession-specific overrides are deliberate and auditable.
@@ -37,10 +41,9 @@ EXPOSURE_GENE_OVERRIDES = {
 
 
 def exposure_id_from_path(path: Path) -> str:
-    suffix = "_lead_snps.txt"
-    if not path.name.endswith(suffix):
-        raise ValueError(f"Unexpected exposure filename: {path.name}")
-    return path.name.removesuffix(suffix)
+    """Return the UKB-PPP exposure ID from a raw or lead-SNP filename."""
+    name = path.name.removesuffix(".gz")
+    return name.removesuffix("_lead_snps.txt").removesuffix(".txt")
 
 
 def uniprot_id_from_exposure(exposure_id: str) -> str:
@@ -62,13 +65,40 @@ def read_uniprot_map(path: Path) -> dict[str, list[dict[str, str]]]:
     return by_accession
 
 
-def lookup_genes(symbols: list[str], retries: int = 4) -> dict[str, dict]:
-    """Use Ensembl's batch endpoint to avoid one network request per protein."""
+def lookup_genes(
+    symbols: list[str],
+    api_base: str = ENSEMBL_API_BASE,
+    retries: int = 4,
+) -> dict[str, dict]:
+    """Resolve each symbol with Ensembl's current GET symbol-lookup API.
+
+    The former bulk POST endpoint can reject a whole request when one alias is
+    invalid.  Looking up symbols independently means an unknown symbol is
+    reported in the audit output without preventing other exposures from being
+    labelled.
+    """
+    records: dict[str, dict] = {}
+    for symbol in symbols:
+        record = lookup_gene(symbol, api_base=api_base, retries=retries)
+        if record is not None:
+            records[symbol] = record
+        # Ensembl permits at most 15 requests/second.  Leave headroom for
+        # shared public-service traffic and avoid avoidable HTTP 429 responses.
+        time.sleep(0.1)
+    return records
+
+
+def lookup_gene(symbol: str, api_base: str, retries: int) -> dict | None:
+    """Return one gene record, or None when the symbol is not known to Ensembl."""
+    encoded_symbol = urllib.parse.quote(symbol, safe="")
+    url = (
+        f"{api_base.rstrip('/')}/lookup/symbol/homo_sapiens/{encoded_symbol}"
+        "?content-type=application/json"
+    )
     request = urllib.request.Request(
-        ENSEMBL_URL,
-        data=json.dumps({"symbols": symbols, "expand": 0}).encode("utf-8"),
-        headers={"Accept": "application/json", "Content-Type": "application/json", "User-Agent": "cis-trans-pqtl-labeler/1.0"},
-        method="POST",
+        url,
+        headers={"Accept": "application/json", "User-Agent": "cis-trans-pqtl-labeler/1.1"},
+        method="GET",
     )
     last_error: Exception | None = None
     for attempt in range(retries):
@@ -77,10 +107,23 @@ def lookup_genes(symbols: list[str], retries: int = 4) -> dict[str, dict]:
                 return json.load(response)
         except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
             last_error = error
-            if isinstance(error, urllib.error.HTTPError) and error.code == 404:
-                break
-            time.sleep(1 + attempt)
-    raise RuntimeError(f"Ensembl batch lookup failed: {last_error}")
+            # The symbol endpoint uses 404 for an absent symbol.  Some
+            # Ensembl releases return 400 for retired aliases instead.
+            if isinstance(error, urllib.error.HTTPError) and error.code in {400, 404}:
+                return None
+            if isinstance(error, urllib.error.HTTPError) and error.code not in {408, 429, 500, 502, 503, 504}:
+                raise RuntimeError(f"Ensembl lookup failed for {symbol}: {error}") from error
+            retry_after = (
+                (error.headers or {}).get("Retry-After")
+                if isinstance(error, urllib.error.HTTPError)
+                else None
+            )
+            try:
+                delay = float(retry_after) if retry_after else 1 + attempt
+            except ValueError:
+                delay = 1 + attempt
+            time.sleep(delay)
+    raise RuntimeError(f"Ensembl lookup failed for {symbol} after {retries} attempts: {last_error}")
 
 
 def normalise_chromosome(value: str) -> str:
@@ -89,17 +132,22 @@ def normalise_chromosome(value: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input-dir", type=Path, default=Path("MR/exposure_all/lead_snps_all"))
-    parser.add_argument("--uniprot-map", type=Path, default=Path("MR/exposure_all/download_UKBPPP/inflammatory_biomarkers_uniprot_ids.csv"))
-    parser.add_argument("--map-output", type=Path, default=Path("MR/exposure_all/protein_gene_map.csv"))
-    parser.add_argument("--labelled-dir", type=Path, default=Path("MR/exposure_all/lead_snps_cis_trans"))
-    parser.add_argument("--audit-output", type=Path, default=Path("MR/exposure_all/protein_gene_map_audit.csv"))
+    parser.add_argument("--input-dir", type=Path, default=Path("exposure_all/UKB_1_22_all_rsid"))
+    parser.add_argument("--uniprot-map", type=Path, default=Path("exposure_all/download_UKBPPP/inflammatory_biomarkers_uniprot_ids.csv"))
+    parser.add_argument("--map-output", type=Path, default=Path("exposure_all/protein_gene_map.csv"))
+    parser.add_argument("--labelled-dir", type=Path, default=Path("exposure_all/UKB_1_22_all_rsid_cis_trans"))
+    parser.add_argument("--audit-output", type=Path, default=Path("exposure_all/protein_gene_map_audit.csv"))
     parser.add_argument("--cis-window", type=int, default=1_000_000)
+    parser.add_argument(
+        "--ensembl-api-base",
+        default=ENSEMBL_API_BASE,
+        help="Ensembl REST base URL (use an archive URL to pin an Ensembl release)",
+    )
     args = parser.parse_args()
 
-    input_files = sorted(args.input_dir.glob("*_lead_snps.txt"))
+    input_files = sorted(args.input_dir.glob("*.gz"))
     if not input_files:
-        raise SystemExit(f"No *_lead_snps.txt files found in {args.input_dir}")
+        raise SystemExit(f"No gzipped exposure files found in {args.input_dir}")
     by_accession = read_uniprot_map(args.uniprot_map)
     args.labelled_dir.mkdir(parents=True, exist_ok=True)
 
@@ -121,7 +169,10 @@ def main() -> None:
         else:
             exposure_symbols[input_file] = (exposure_id, accession, (candidate_symbols[0],))
 
-    ensembl_records = lookup_genes(sorted({symbol for item in exposure_symbols.values() for symbol in item[2]}))
+    ensembl_records = lookup_genes(
+        sorted({symbol for item in exposure_symbols.values() for symbol in item[2]}),
+        api_base=args.ensembl_api_base,
+    )
     resolved: dict[str, dict[str, str]] = {}
     for symbol, record in ensembl_records.items():
         if record and record.get("assembly_name") == "GRCh38" and record.get("seq_region_name"):
@@ -148,7 +199,7 @@ def main() -> None:
             "tss": "|".join(coord["tss"] for coord in coords),
         })
 
-        with input_file.open(newline="", encoding="utf-8") as source:
+        with gzip.open(input_file, mode="rt", newline="", encoding="utf-8") as source:
             reader = csv.DictReader(source, delimiter="\t")
             required = {"CHROM", "GENPOS"}
             if not reader.fieldnames or not required.issubset(reader.fieldnames):
@@ -170,7 +221,7 @@ def main() -> None:
                     ) else "trans"
                 rows.append(row)
 
-        output_file = args.labelled_dir / input_file.name
+        output_file = args.labelled_dir / f"{exposure_id}.txt"
         with output_file.open("w", newline="", encoding="utf-8") as target:
             writer = csv.DictWriter(target, fieldnames=fieldnames, delimiter="\t", extrasaction="ignore")
             writer.writeheader()

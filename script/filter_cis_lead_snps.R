@@ -1,5 +1,17 @@
-source_dir <- "exposure_all/lead_snps_cis_trans"
-target_dir <- "exposure_all/lead_snps_cis"
+args <- commandArgs(trailingOnly = TRUE)
+if (length(args) > 2L) {
+  stop(
+    "Usage: Rscript script/filter_cis_lead_snps.R [labelled_dir] [cis_output_dir]",
+    call. = FALSE
+  )
+}
+
+source_dir <- if (length(args) >= 1L) args[[1L]] else "exposure_all/UKB_1_22_all_rsid_cis_trans"
+target_dir <- if (length(args) >= 2L) args[[2L]] else "exposure_all/UKB_1_22_all_rsid_cis"
+
+if (!dir.exists(source_dir)) {
+  stop("Labelled input directory does not exist: ", source_dir, call. = FALSE)
+}
 
 dir.create(target_dir, recursive = TRUE, showWarnings = FALSE)
 
