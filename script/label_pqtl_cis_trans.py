@@ -14,14 +14,29 @@ import gzip
 import json
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from pathlib import Path
 
 
-# Current Ensembl REST lookup API.  Keep this as a base URL so an Ensembl
-# archive server can be selected on the command line for reproducible runs.
-ENSEMBL_API_BASE = "https://rest.ensembl.org"
+# Ensembl's current GraphQL API and its GRCh38.p14 assembly accession.
+ENSEMBL_GRAPHQL_URL = "https://www.ensembl.org/data/graphql"
+GRCH38_ASSEMBLY_ACCESSION = "GCA_000001405.29"
+GENOME_QUERY = """
+query Genome($assembly: String!) {
+  genomes(by_keyword: {assembly_accession_id: $assembly}) { genome_id }
+}
+"""
+GENE_QUERY = """
+query Gene($genome_id: String!, $symbol: String!) {
+  genes(by_symbol: {genome_id: $genome_id, symbol: $symbol}) {
+    slice {
+      region { name }
+      location { start end }
+      strand { value }
+    }
+  }
+}
+"""
 
 # The source UniProt table contains several protein aliases rather than current
 # HGNC symbols. These accession-specific overrides are deliberate and auditable.
@@ -67,52 +82,96 @@ def read_uniprot_map(path: Path) -> dict[str, list[dict[str, str]]]:
 
 def lookup_genes(
     symbols: list[str],
-    api_base: str = ENSEMBL_API_BASE,
+    graphql_url: str = ENSEMBL_GRAPHQL_URL,
     retries: int = 4,
 ) -> dict[str, dict]:
-    """Resolve each symbol with Ensembl's current GET symbol-lookup API.
-
-    The former bulk POST endpoint can reject a whole request when one alias is
-    invalid.  Looking up symbols independently means an unknown symbol is
-    reported in the audit output without preventing other exposures from being
-    labelled.
-    """
+    """Resolve symbols using Ensembl's GraphQL API on GRCh38.p14."""
+    genome_id = lookup_grch38_genome_id(graphql_url, retries)
     records: dict[str, dict] = {}
     for symbol in symbols:
-        record = lookup_gene(symbol, api_base=api_base, retries=retries)
+        record = lookup_gene(symbol, genome_id, graphql_url, retries)
         if record is not None:
             records[symbol] = record
-        # Ensembl permits at most 15 requests/second.  Leave headroom for
-        # shared public-service traffic and avoid avoidable HTTP 429 responses.
-        time.sleep(0.1)
     return records
 
 
-def lookup_gene(symbol: str, api_base: str, retries: int) -> dict | None:
-    """Return one gene record, or None when the symbol is not known to Ensembl."""
-    encoded_symbol = urllib.parse.quote(symbol, safe="")
-    url = (
-        f"{api_base.rstrip('/')}/lookup/symbol/homo_sapiens/{encoded_symbol}"
-        "?content-type=application/json"
+def lookup_grch38_genome_id(graphql_url: str, retries: int) -> str:
+    """Return the GraphQL genome ID for the current GRCh38 annotation."""
+    data = graphql_request(
+        GENOME_QUERY,
+        {"assembly": GRCH38_ASSEMBLY_ACCESSION},
+        graphql_url,
+        retries,
     )
+    genomes = data.get("genomes", [])
+    if not genomes or not genomes[0].get("genome_id"):
+        raise RuntimeError(f"Ensembl GraphQL did not return {GRCH38_ASSEMBLY_ACCESSION}")
+    return genomes[0]["genome_id"]
+
+
+def lookup_gene(
+    symbol: str,
+    genome_id: str,
+    graphql_url: str,
+    retries: int,
+) -> dict | None:
+    """Return one GRCh38 gene record, or None when the symbol is unknown."""
+    data = graphql_request(
+        GENE_QUERY,
+        {"genome_id": genome_id, "symbol": symbol},
+        graphql_url,
+        retries,
+    )
+    genes = data.get("genes", [])
+    if not genes:
+        return None
+    gene_slice = genes[0].get("slice") or {}
+    location = gene_slice.get("location") or {}
+    region = gene_slice.get("region") or {}
+    strand = gene_slice.get("strand") or {}
+    if not region.get("name") or not location.get("start") or not location.get("end"):
+        return None
+    return {
+        "assembly_name": "GRCh38",
+        "seq_region_name": str(region["name"]),
+        "start": location["start"],
+        "end": location["end"],
+        "strand": strand.get("value"),
+    }
+
+
+def graphql_request(
+    query: str,
+    variables: dict[str, str],
+    graphql_url: str,
+    retries: int,
+) -> dict:
+    """Execute a GraphQL request and retry only transport failures."""
     request = urllib.request.Request(
-        url,
-        headers={"Accept": "application/json", "User-Agent": "cis-trans-pqtl-labeler/1.1"},
-        method="GET",
+        graphql_url,
+        data=json.dumps({"query": query, "variables": variables}).encode("utf-8"),
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "cis-trans-pqtl-labeler/2.0",
+        },
+        method="POST",
     )
     last_error: Exception | None = None
     for attempt in range(retries):
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
-                return json.load(response)
+                payload = json.load(response)
+            if payload.get("errors"):
+                messages = "; ".join(error.get("message", str(error)) for error in payload["errors"])
+                raise RuntimeError(f"Ensembl GraphQL query failed: {messages}")
+            if not isinstance(payload.get("data"), dict):
+                raise RuntimeError("Ensembl GraphQL response did not contain a data object")
+            return payload["data"]
         except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
             last_error = error
-            # The symbol endpoint uses 404 for an absent symbol.  Some
-            # Ensembl releases return 400 for retired aliases instead.
-            if isinstance(error, urllib.error.HTTPError) and error.code in {400, 404}:
-                return None
             if isinstance(error, urllib.error.HTTPError) and error.code not in {408, 429, 500, 502, 503, 504}:
-                raise RuntimeError(f"Ensembl lookup failed for {symbol}: {error}") from error
+                raise RuntimeError(f"Ensembl GraphQL request failed: {error}") from error
             retry_after = (
                 (error.headers or {}).get("Retry-After")
                 if isinstance(error, urllib.error.HTTPError)
@@ -123,7 +182,7 @@ def lookup_gene(symbol: str, api_base: str, retries: int) -> dict | None:
             except ValueError:
                 delay = 1 + attempt
             time.sleep(delay)
-    raise RuntimeError(f"Ensembl lookup failed for {symbol} after {retries} attempts: {last_error}")
+    raise RuntimeError(f"Ensembl GraphQL request failed after {retries} attempts: {last_error}")
 
 
 def normalise_chromosome(value: str) -> str:
@@ -139,9 +198,9 @@ def main() -> None:
     parser.add_argument("--audit-output", type=Path, default=Path("exposure_all/protein_gene_map_audit.csv"))
     parser.add_argument("--cis-window", type=int, default=1_000_000)
     parser.add_argument(
-        "--ensembl-api-base",
-        default=ENSEMBL_API_BASE,
-        help="Ensembl REST base URL (use an archive URL to pin an Ensembl release)",
+        "--ensembl-graphql-url",
+        default=ENSEMBL_GRAPHQL_URL,
+        help="Ensembl GraphQL endpoint URL",
     )
     args = parser.parse_args()
 
@@ -171,7 +230,7 @@ def main() -> None:
 
     ensembl_records = lookup_genes(
         sorted({symbol for item in exposure_symbols.values() for symbol in item[2]}),
-        api_base=args.ensembl_api_base,
+        graphql_url=args.ensembl_graphql_url,
     )
     resolved: dict[str, dict[str, str]] = {}
     for symbol, record in ensembl_records.items():
