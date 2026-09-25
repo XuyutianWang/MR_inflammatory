@@ -22,6 +22,16 @@ Step	Description	Script Path
 3.2	Convert LOG10P values to standard P-values.	MR/script/p_value_log10p.py
 3.3	Match rsIDs using SNPlocs.Hsapiens.dbSNP155.GRCh38 reference.	MR/script/exposure_rsid.R
 
+3.4 seperating cis and trans pqtls.
+labelling cis and trans: script/label_pqtl_cis_trans.py
+remove trans pqtls: script/filter_cis_lead_snps.R
+
+3.5 ld clumping
+script/run_clump.sh
+
+3.6 remove weak instruments
+
+
 4. Preprocess Survival Outcome Data
 Prepare the outcome GWAS data for harmonization with exposure data.
 

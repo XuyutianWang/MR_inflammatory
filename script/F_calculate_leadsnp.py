@@ -4,9 +4,9 @@ import gzip
 import glob
 import os
 
-clump_dir = os.path.expanduser("MR/exposure_all/clump_results_all")              # .clumped files directory
-gz_dir = os.path.expanduser("MR/exposure_all/UKB_1_22_all_rsid")  # original .gz files directory
-out_dir = os.path.expanduser("MR/exposure_all/lead_snps_all")     # new output directory for lead SNPs
+clump_dir = os.path.expanduser("exposure_all/UKB_1_22_all_rsid_cis_clumped")              # .clumped files directory
+txt_dir = os.path.expanduser("exposure_all/UKB_1_22_all_rsid_cis")  # original .gz files directory
+out_dir = os.path.expanduser("exposure_all/UKB_1_22_all_rsid_cis_clumped_redo")     # new output directory for lead SNPs
 
 os.makedirs(out_dir, exist_ok=True)
 
@@ -14,14 +14,14 @@ clump_files = glob.glob(os.path.join(clump_dir, "*.clumped"))
 
 for c_file in clump_files:
     prefix = os.path.basename(c_file).replace(".clumped", "")
-    gz_file = os.path.join(gz_dir, f"{prefix}.gz")
+    txt_file = os.path.join(txt_dir, f"{prefix}.txt")
     
-    if not os.path.exists(gz_file):
-        possible_gz = glob.glob(os.path.join(gz_dir, f"{prefix}*.gz"))
-        if possible_gz:
-            gz_file = possible_gz[0]
+    if not os.path.exists(txt_file):
+        possible_txt = glob.glob(os.path.join(txt_dir, f"{prefix}*.txt"))
+        if possible_txt:
+            txt_file = possible_txt[0]
         else:
-            print(f"cannot find corresponding .gz file: {prefix}")
+            print(f"cannot find corresponding .txt file: {prefix}")
             continue
 
     # 1. extract Lead SNP names from .clumped file (3rd column, i.e., index 2)
@@ -37,16 +37,16 @@ for c_file in clump_files:
         print(f"[{prefix}] no significant Lead SNPs found")
         continue
 
-    # 2. extract Lead SNP rows from the original .gz file
+    # 2. extract Lead SNP rows from the original .txt file
     extracted_rows = []
-    with gzip.open(gz_file, 'rt') as gz_in:
-        header_line = gz_in.readline().strip().split('\t')
+    with open(txt_file, 'r') as txt_in:
+        header_line = txt_in.readline().strip().split('\t')
         
         if len(header_line) == 1:
-            gz_in.seek(0)
-            df_full = pd.read_csv(gz_file, sep=r'\s+')
+            txt_in.seek(0)
+            df_full = pd.read_csv(txt_file, sep=r'\s+')
         else:
-            df_full = pd.read_csv(gz_file, sep='\t')
+            df_full = pd.read_csv(txt_file, sep='\t')
 
     # The source files use either SNP or rsid for the variant identifier.
     if 'SNP' not in df_full.columns:
