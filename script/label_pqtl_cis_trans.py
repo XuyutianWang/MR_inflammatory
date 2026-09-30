@@ -21,6 +21,11 @@ from pathlib import Path
 # Ensembl's current GraphQL API and its GRCh38.p14 assembly accession.
 ENSEMBL_GRAPHQL_URL = "https://www.ensembl.org/data/graphql"
 GRCH38_ASSEMBLY_ACCESSION = "GCA_000001405.29"
+# Ensembl can return alternate loci and patch-contig placements alongside the
+# primary GRCh38 placement for a gene.  The pQTL summary statistics use the
+# primary chromosomes, so cis classification must use the corresponding gene
+# location rather than whichever result happens to appear first.
+PRIMARY_GRCH38_REGIONS = {str(chromosome) for chromosome in range(1, 23)} | {"X", "Y", "MT"}
 GENOME_QUERY = """
 query Genome($assembly: String!) {
   genomes(by_keyword: {assembly_accession_id: $assembly}) { genome_id }
@@ -115,7 +120,14 @@ def lookup_gene(
     graphql_url: str,
     retries: int,
 ) -> dict | None:
-    """Return one GRCh38 gene record, or None when the symbol is unknown."""
+    """Return a primary-chromosome GRCh38 gene record, if available.
+
+    ``genes(by_symbol: ...)`` can return several loci for the same symbol.
+    In particular, the first record may be an alternate haplotype or patch
+    contig (for example ``HSCHR17_7_CTG4``) instead of chromosomes 1--22, X,
+    Y, or MT.  Selecting that record makes every ordinary-chromosome pQTL look
+    trans.  Only canonical chromosome placements are valid for this pipeline.
+    """
     data = graphql_request(
         GENE_QUERY,
         {"genome_id": genome_id, "symbol": symbol},
@@ -123,21 +135,37 @@ def lookup_gene(
         retries,
     )
     genes = data.get("genes", [])
-    if not genes:
+    candidates: list[dict] = []
+    for gene in genes:
+        gene_slice = gene.get("slice") or {}
+        location = gene_slice.get("location") or {}
+        region = gene_slice.get("region") or {}
+        strand = gene_slice.get("strand") or {}
+        region_name = normalise_chromosome(region.get("name", ""))
+        if (
+            region_name not in PRIMARY_GRCH38_REGIONS
+            or not location.get("start")
+            or not location.get("end")
+            or strand.get("value") not in (1, -1)
+        ):
+            continue
+        candidates.append({
+            "assembly_name": "GRCh38",
+            "seq_region_name": region_name,
+            "start": location["start"],
+            "end": location["end"],
+            "strand": strand["value"],
+        })
+
+    if not candidates:
         return None
-    gene_slice = genes[0].get("slice") or {}
-    location = gene_slice.get("location") or {}
-    region = gene_slice.get("region") or {}
-    strand = gene_slice.get("strand") or {}
-    if not region.get("name") or not location.get("start") or not location.get("end"):
-        return None
-    return {
-        "assembly_name": "GRCh38",
-        "seq_region_name": str(region["name"]),
-        "start": location["start"],
-        "end": location["end"],
-        "strand": strand.get("value"),
-    }
+
+    # A symbol normally has one primary placement.  Retain deterministic
+    # behaviour if Ensembl returns duplicate records for the same placement.
+    candidates.sort(key=lambda item: (
+        item["seq_region_name"], int(item["start"]), int(item["end"]), item["strand"]
+    ))
+    return candidates[0]
 
 
 def graphql_request(

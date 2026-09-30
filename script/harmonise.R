@@ -68,8 +68,7 @@ for (exp_path in exp_files) {
         beta_col = "Beta",       
         se_col = "SE",           
         effect_allele_col = "a1",  
-        other_allele_col = "a0",   
-        eaf_col = "exp_freq_a1_OncoArray",           
+        other_allele_col = "a0",           
         pval_col = "P"            
       )
       
