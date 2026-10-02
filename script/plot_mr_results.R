@@ -31,7 +31,10 @@ parse_labels <- function(filename) {
   parts <- strsplit(tag, "__VS__", fixed = TRUE)[[1]]
   exposure_id <- parts[1]
   outcome_id <- if (length(parts) > 1) parts[2] else "Unknown outcome"
-  list(protein = sub("_.*$", "", exposure_id), outcome = gsub("_", " ", outcome_id, fixed = TRUE))
+  # Retain the complete exposure/assay ID.  A shortened prefix (for example,
+  # "BDNF") is not unique when several SomaScan assays target one protein,
+  # which creates duplicate factor levels and aborts replication plotting.
+  list(protein = exposure_id, outcome = gsub("_", " ", outcome_id, fixed = TRUE))
 }
 file_safe <- function(x) gsub("[^A-Za-z0-9]+", "_", x)
 labels <- lapply(dt$filename, parse_labels)
@@ -104,7 +107,7 @@ if (file.exists(all_methods_file)) {
     if (!nrow(subtype_methods)) next
     subtype_methods[, signed_logp := sign(b) * pmin(-log10(pmax(pval, .Machine$double.xmin)), 12)]
     subtype_methods[, protein := vapply(lapply(filename, parse_labels), `[[`, character(1), "protein")]
-    protein_levels <- subtype_hits$protein[!duplicated(subtype_hits$protein)]
+    protein_levels <- unique(as.character(subtype_hits$protein))
     subtype_methods[, protein := factor(protein, levels = rev(protein_levels))]
     consistency <- ggplot(subtype_methods, aes(x = method, y = protein, fill = signed_logp)) +
       geom_tile(colour = "white", linewidth = 0.2) +
