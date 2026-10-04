@@ -1,0 +1,1 @@
+outcome_group,database,biomarker_accession,biomarker_label,exposure_id_file,endpoint,endpoint_key,nsnp,b,se,exp_b,exp_lci95,exp_uci95,pval,qval_bh,fdr_significant,evidence,outcome_id_file

@@ -1,0 +1,2 @@
+outcome_group,database,biomarker_accession,biomarker_label,exposure_id_file,endpoint,endpoint_key,nsnp,b,se,exp_b,exp_lci95,exp_uci95,pval,qval_bh,fdr_significant,evidence,outcome_id_file
+incidence,UKB-PPP,P09038,FGF2,FGF2_P09038_OID20503_v1_Inflammation,Luminal A rsid,luminal_a_rsid,4,-0.0828575909998058,0.0202175693746561,0.92048222283978,0.88472003648665,0.957689989625151,4.16202175995171e-05,0.0208101087997586,TRUE,FDR significant (q < 0.05),Luminal_A_rsid
