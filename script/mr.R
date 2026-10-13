@@ -94,7 +94,7 @@ for (i in seq_along(csv_files)) {
 
     if (nsnp >= 2) heterogeneity_results[[length(heterogeneity_results) + 1]] <- add_pair_metadata(tryCatch(mr_heterogeneity(dat_clean), error = function(e) NULL), file)
     if (nsnp >= 3) {
-      pleiotropy_results[[length(pleiotropy_results) + 1]] <- add_pair_metadata(tryCatch(mr_pleio_test(dat_clean), error = function(e) NULL), file)
+      pleiotropy_results[[length(pleiotropy_results) + 1]] <- add_pair_metadata(tryCatch(mr_pleiotropy_test(dat_clean), error = function(e) NULL), file)
       loo_results[[length(loo_results) + 1]] <- add_pair_metadata(tryCatch(mr_leaveoneout(dat_clean), error = function(e) NULL), file)
     }
     # This is opt-in: survival GWAS summary data often do not permit a valid
